@@ -86,6 +86,20 @@ export function getPendingSubagentCount(): number {
   return runtime?.runningSubagents instanceof Map ? runtime.runningSubagents.size : 0;
 }
 
+/**
+ * Other extensions' work that will wake this session later (a background job that
+ * wakes it when it exits, say). An auto-exit subagent stays open while any is
+ * pending, as it does for running child subagents. Each extension adds and
+ * removes its own keys:
+ *
+ *   (globalThis[Symbol.for("pi-subagents/keepalive")] ??= new Set()).add("wake:3")
+ */
+export const KEEPALIVE = Symbol.for("pi-subagents/keepalive");
+export function getKeepaliveCount(): number {
+  const set = (globalThis as any)[KEEPALIVE];
+  return set instanceof Set ? set.size : 0;
+}
+
 export function parseDeniedTools(rawValue: string | undefined): string[] {
   return (rawValue ?? "")
     .split(",")
@@ -203,7 +217,7 @@ export default function (pi: ExtensionAPI) {
       && shouldAutoExitOnAgentEnd(
         userTookOver,
         latestAgentMessages,
-        getPendingSubagentCount(),
+        getPendingSubagentCount() + getKeepaliveCount(),
         ctx.hasPendingMessages?.() === true,
       );
 

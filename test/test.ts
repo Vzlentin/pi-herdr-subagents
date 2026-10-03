@@ -51,6 +51,8 @@ import {
 import subagentDoneExtension, {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
+  getKeepaliveCount,
+  KEEPALIVE,
   findLatestAssistantError,
   buildCompletionSidecar,
 } from "../pi-extension/subagents/subagent-done.ts";
@@ -3264,5 +3266,16 @@ describe("herdr.ts", () => {
       }), "w1:p1");
       assert.deepEqual(result, { kind: "present", agent: "pi", agentStatus: "unknown" });
     });
+  });
+});
+
+describe("keepalive", () => {
+  it("counts other extensions' pending work", () => {
+    delete (globalThis as any)[KEEPALIVE];
+    assert.equal(getKeepaliveCount(), 0);
+    ((globalThis as any)[KEEPALIVE] ??= new Set()).add("wake:1");
+    assert.equal(getKeepaliveCount(), 1);
+    (globalThis as any)[KEEPALIVE].delete("wake:1");
+    assert.equal(getKeepaliveCount(), 0);
   });
 });
