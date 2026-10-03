@@ -73,12 +73,13 @@ Subagent tabs and panes are created without stealing keyboard focus. Launch comm
 
 ### Extensions
 
-**Subagents** — 4 main-session tools + 3 commands, plus 1 subagent-only tool:
+**Subagents** — 5 main-session tools + 3 commands, plus 1 subagent-only tool:
 
 | Tool                 | Description                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `subagent`           | Spawn a sub-agent in a dedicated herdr pane (async — returns immediately)             |
 | `subagent_interrupt` | Interrupt a running Pi-backed subagent's current turn                                       |
+| `subagent_message`   | Send a message to a running Pi-backed subagent by name or id                                |
 | `subagents_list`     | List available agent definitions                                                            |
 | `subagent_resume`    | Resume a previous sub-agent session (async)                                                 |
 
@@ -233,6 +234,16 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 | `cwd`                  | string  | —              | Working directory for the sub-agent (see [Role Folders](#role-folders))                           |
 
 ---
+
+## Messaging a running subagent
+
+Use `subagent_message` to talk to a running Pi-backed subagent without pane ids or shell quoting:
+
+```typescript
+subagent_message({ name: "Scout", message: "Don't loosen that threshold; find out why it fails." });
+```
+
+The parent writes the message to a file inbox next to the child's activity file (`<artifacts>/subagent-inbox/<id>/`). The child checks it every second and delivers it with Pi's own `sendUserMessage`: as a steer if it is mid-turn, or as a new prompt if it is idle. The text reaches the model exactly as written. The tool returns only an acknowledgement; the subagent's reply arrives as its normal result.
 
 ## Interrupting a running subagent
 

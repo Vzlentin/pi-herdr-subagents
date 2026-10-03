@@ -1207,7 +1207,7 @@ describe("subagent discovery", () => {
   it("buildSubagentToolAllowlist preserves requested tools and nested dispatch", () => {
     assert.equal(
       testApi.buildSubagentToolAllowlist("read,bash,web_search"),
-      "read,bash,web_search,subagent,subagent_interrupt,subagents_list,subagent_resume,caller_ping,subagent_done",
+      "read,bash,web_search,subagent,subagent_interrupt,subagents_list,subagent_resume,subagent_message,caller_ping,subagent_done",
     );
   });
 
@@ -1215,7 +1215,7 @@ describe("subagent discovery", () => {
     assert.equal(
       testApi.buildSubagentToolAllowlist(
         "read,bash",
-        new Set(["subagent", "subagent_interrupt", "subagents_list", "subagent_resume"]),
+        new Set(["subagent", "subagent_interrupt", "subagents_list", "subagent_resume", "subagent_message"]),
       ),
       "read,bash,caller_ping,subagent_done",
     );
@@ -2180,6 +2180,7 @@ describe("tool registration", () => {
     assert.equal(denied.has("subagent"), true);
     assert.equal(denied.has("subagent_interrupt"), true);
     assert.equal(denied.has("subagent_resume"), true);
+    assert.equal(denied.has("subagent_message"), true);
   });
 
   it("renders partial subagent tool-call args without throwing", () => {
@@ -3277,5 +3278,22 @@ describe("keepalive", () => {
     assert.equal(getKeepaliveCount(), 1);
     (globalThis as any)[KEEPALIVE].delete("wake:1");
     assert.equal(getKeepaliveCount(), 0);
+  });
+});
+
+describe("subagent inbox", () => {
+  it("delivers parent messages to the child in order, once", async () => {
+    const { getSubagentInboxDir, writeInboxMessage, drainInbox } = await import("../pi-extension/subagents/inbox.ts");
+    const root = mkdtempSync(join(tmpdir(), "subagent-inbox-"));
+    try {
+      const dir = getSubagentInboxDir(join(root, "subagent-activity", "abc123.json"));
+      assert.equal(dir, join(root, "subagent-inbox", "abc123"));
+      writeInboxMessage(dir, { text: "first `backticks` $(survive)", sentAt: 1 });
+      writeInboxMessage(dir, { text: "second", sentAt: 2 });
+      assert.deepEqual(drainInbox(dir).map((m) => m.text), ["first `backticks` $(survive)", "second"]);
+      assert.deepEqual(drainInbox(dir), []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

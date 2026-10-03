@@ -13,6 +13,7 @@ const SUBAGENT_SPAWNING_TOOLS = [
   "subagent_interrupt",
   "subagents_list",
   "subagent_resume",
+  "subagent_message",
 ] as const;
 
 export function shouldIsolateChildExtensions(

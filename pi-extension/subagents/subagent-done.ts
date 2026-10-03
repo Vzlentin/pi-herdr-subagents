@@ -8,6 +8,10 @@ import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
+import { drainInbox, getSubagentInboxDir } from "./inbox.ts";
+
+// One inbox poller per process, replaced on /reload.
+const INBOX_INTERVAL_KEY = Symbol.for("pi-subagents/child-inbox-interval");
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -185,7 +189,31 @@ export default function (pi: ExtensionAPI) {
     denied = parseDeniedTools(deniedToolsValue);
 
     renderWidget(ctx, null);
+    startInboxPoll(ctx);
   });
+
+  // Messages from the parent's subagent_message tool.
+  function startInboxPoll(ctx: { isIdle(): boolean }) {
+    const prev = (globalThis as any)[INBOX_INTERVAL_KEY];
+    if (prev) clearInterval(prev);
+    (globalThis as any)[INBOX_INTERVAL_KEY] = null;
+    const activityFile = process.env.PI_SUBAGENT_ACTIVITY_FILE?.trim();
+    if (!activityFile) return;
+    const dir = getSubagentInboxDir(activityFile);
+    const timer = setInterval(() => {
+      for (const m of drainInbox(dir)) {
+        const text = `Message from your parent agent:\n\n${m.text}`;
+        try {
+          if (ctx.isIdle()) pi.sendUserMessage(text);
+          else pi.sendUserMessage(text, { deliverAs: "steer" });
+        } catch {
+          // Stale ctx after reload/shutdown; the next session_start restarts polling.
+        }
+      }
+    }, 1000);
+    timer.unref?.();
+    (globalThis as any)[INBOX_INTERVAL_KEY] = timer;
+  }
 
   pi.on("input", () => {
     recorder.input();
@@ -292,6 +320,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     recorder.sessionShutdown((event as any).reason);
+    const timer = (globalThis as any)[INBOX_INTERVAL_KEY];
+    if (timer) clearInterval(timer);
+    (globalThis as any)[INBOX_INTERVAL_KEY] = null;
   });
 
   // Toggle expand/collapse with Ctrl+J

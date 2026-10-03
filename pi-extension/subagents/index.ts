@@ -42,6 +42,7 @@ import {
   resolveChildOpenAIServiceTier,
 } from "./harness/index.ts";
 import { loadModelConfig, resolveModelDefault, type ModelConfig } from "./model-config.ts";
+import { getSubagentInboxDir, writeInboxMessage } from "./inbox.ts";
 
 import {
   findLastAssistantMessage,
@@ -227,6 +228,7 @@ const SPAWNING_TOOLS = new Set([
   "subagent_interrupt",
   "subagents_list",
   "subagent_resume",
+  "subagent_message",
 ]);
 
 /**
@@ -948,6 +950,36 @@ function resolveInterruptTarget(params: { id?: string; name?: string }):
 
   const candidates = matches.map((running) => `${running.name} [${running.id}]`).join(", ");
   return { error: `Ambiguous subagent name "${requestedName}". Matches: ${candidates}` };
+}
+
+function handleSubagentMessage(params: { id?: string; name?: string; message: string }) {
+  const fail = (error: string, extra: Record<string, unknown> = {}) => ({
+    content: [{ type: "text" as const, text: error }],
+    details: { error, ...extra },
+  });
+  const text = params.message?.trim();
+  if (!text) return fail("Provide a non-empty message.");
+  const resolved = resolveInterruptTarget(params);
+  if ("error" in resolved) return fail(resolved.error);
+  const running = resolved.running;
+  const who = { id: running.id, name: running.name };
+  if (!getHarnessDriver(running.cli).supportsTurnInterrupt || !running.activityFile) {
+    return fail(`Subagent "${running.name}" is not Pi-backed, so it has no message inbox.`, who);
+  }
+  try {
+    writeInboxMessage(getSubagentInboxDir(running.activityFile), { text, from: "parent", sentAt: Date.now() });
+  } catch (err) {
+    return fail(`Could not write to subagent "${running.name}"'s inbox: ${err instanceof Error ? err.message : String(err)}`, who);
+  }
+  return {
+    content: [{
+      type: "text" as const,
+      text:
+        `Message queued for subagent "${running.name}". It is delivered within about a second: as a steer if the subagent is mid-turn, or as a new prompt if it is idle. ` +
+        `Its reply comes back as its normal result.`,
+    }],
+    details: { ...who, status: "message_queued" },
+  };
 }
 
 function requestSubagentInterrupt(
@@ -1791,6 +1823,52 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           );
         }
 
+        const text = typeof result.content[0]?.text === "string" ? result.content[0].text : "";
+        return new Text(theme.fg("dim", text), 0, 0);
+      },
+    });
+
+  // ── subagent_message tool ──
+  if (shouldRegister("subagent_message"))
+    pi.registerTool({
+      name: "subagent_message",
+      label: "Message Subagent",
+      description:
+        "Send a message to a currently running Pi-backed subagent by name or id. " +
+        "It arrives as a steer if the subagent is mid-turn, or as a new prompt if it is idle. " +
+        "No pane ids or shell quoting involved. Returns only a local acknowledgement; the subagent's reply arrives as its normal result.",
+      promptSnippet:
+        "Send a message to a running Pi-backed subagent by name or id (steers it mid-turn, or prompts it if idle).",
+      parameters: Type.Object({
+        id: Type.Optional(Type.String({ description: "Exact running subagent id" })),
+        name: Type.Optional(Type.String({ description: "Exact running subagent display name" })),
+        message: Type.String({ description: "Text to deliver to the subagent" }),
+      }),
+
+      async execute(_toolCallId, params) {
+        return handleSubagentMessage(params);
+      },
+
+      renderCall(args, theme) {
+        const target = args.id ? `${args.id}` : args.name ?? "(unknown)";
+        return new Text(
+          theme.fg("accent", "▸") + " " + theme.fg("toolTitle", theme.bold(target)) + theme.fg("dim", " — message"),
+          0,
+          0,
+        );
+      },
+
+      renderResult(result, _opts, theme) {
+        const details = result.details as any;
+        if (details?.status === "message_queued") {
+          return new Text(
+            theme.fg("accent", "▸") + " " +
+              theme.fg("toolTitle", theme.bold(details.name ?? details.id ?? "subagent")) +
+              theme.fg("dim", " — message queued"),
+            0,
+            0,
+          );
+        }
         const text = typeof result.content[0]?.text === "string" ? result.content[0].text : "";
         return new Text(theme.fg("dim", text), 0, 0);
       },
