@@ -1,6 +1,7 @@
 {
   "extensions": [
-    "../pi-extension/subagents/index.ts"
+    "../pi-extension/subagents/index.ts",
+    "../pi-extension/subagents/openai-priority.ts"
   ],
   "skills": [
     "./skills/run-integration-tests/SKILL.md"

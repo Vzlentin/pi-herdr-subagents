@@ -19,6 +19,7 @@ concurrency:
 jobs:
   detect:
     name: Detect version bump
+    if: vars.ENABLE_RELEASES == 'true'
     runs-on: ubuntu-latest
     outputs:
       release: ${{ steps.version.outputs.release }}

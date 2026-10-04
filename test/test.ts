@@ -38,6 +38,7 @@ import {
   forceStatusAfterInterrupt,
   formatStatusAggregate,
   formatStatusLine,
+  formatElapsedDuration,
   formatTransitionLine,
   observeStatus,
   loadStatusConfig,
@@ -60,6 +61,7 @@ import { interpretExitSidecar, waitForCompletion } from "../pi-extension/subagen
 import {
   createLifecycle,
   lifecycleTransition,
+  formatLifecycleTransitionLine,
   markCompleted,
   markCompletionDetected,
   markFailed,
@@ -474,7 +476,16 @@ describe("session.ts", () => {
     });
 
     it("creates a forked child session with copied context before the triggering user turn", () => {
-      const parentFile = createSessionFile(dir, [SESSION_HEADER, MODEL_CHANGE, USER_MSG, ASSISTANT_MSG]);
+      const history = [
+        MODEL_CHANGE,
+        USER_MSG,
+        ASSISTANT_MSG,
+        { ...TOOL_RESULT, parentId: ASSISTANT_MSG.id },
+        { ...ASSISTANT_MSG_2, parentId: TOOL_RESULT.id },
+      ];
+      const trigger = { ...USER_MSG, id: "fork-trigger", parentId: ASSISTANT_MSG_2.id };
+      const response = { ...ASSISTANT_MSG, id: "fork-response", parentId: trigger.id };
+      const parentFile = createSessionFile(dir, [SESSION_HEADER, ...history, trigger, response]);
       const childFile = join(dir, "fork-child.jsonl");
 
       seedSubagentSessionFile({
@@ -488,13 +499,12 @@ describe("session.ts", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      assert.equal(entries.length, 2);
+      assert.equal(entries.length, history.length + 1);
       assert.equal(entries[0].type, "session");
       assert.equal(entries[0].parentSession, parentFile);
       assert.equal(entries[0].cwd, "/tmp/fork-child-cwd");
-      assert.equal(entries[1].type, "model_change");
       assert.equal(entries.some((entry) => entry.type === "session" && entry.parentSession !== parentFile), false);
-      assert.equal(entries.some((entry) => entry.type === "message"), false);
+      assert.deepEqual(entries.slice(1), history);
     });
   });
 
@@ -970,6 +980,25 @@ describe("model configuration", () => {
 
 describe("subagent discovery", () => {
   const testApi = (subagentsModule as any).__test__;
+
+  it("loads supported system-prompt modes and ignores missing or invalid values", async () => {
+    await withIsolatedAgentEnv(({ projectAgentsDir }) => {
+      const modes = ["replace", "append", undefined, "foobar"];
+      for (const [index, mode] of modes.entries()) {
+        const name = `system-prompt-test-${index}`;
+        writeAgentFile(
+          projectAgentsDir,
+          name,
+          [`name: ${name}`, ...(mode ? [`system-prompt: ${mode}`] : [])].join("\n"),
+        );
+
+        const loaded = testApi.loadAgentDefaults(name);
+        assert.ok(loaded);
+        assert.equal(loaded.systemPromptMode, mode === "replace" || mode === "append" ? mode : undefined);
+        assert.equal(loaded.body, "You are a test agent.");
+      }
+    });
+  });
 
   it("loads session-mode from frontmatter", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
@@ -1684,6 +1713,32 @@ describe("lifecycle.ts", () => {
     assert.equal(lifecycleTransition("stalled", "blocked"), "recovered");
     assert.equal(lifecycleTransition("stalled", "interrupted"), "recovered");
     assert.equal(lifecycleTransition("waiting", "active"), null);
+  });
+
+  it("stalls at the pane watchdog threshold and reports recovery through the live lifecycle", () => {
+    let lifecycle = createLifecycle(1_000);
+    lifecycle = observePaneInspection(lifecycle, { kind: "present", observedAt: 2_000, agentStatus: "working" }, 2_000);
+    lifecycle = observePaneInspection(lifecycle, { kind: "unavailable", error: "socket" }, 3_000);
+    lifecycle = observePaneInspection(lifecycle, { kind: "unavailable", error: "socket" }, 4_000);
+    assert.equal(projectLifecycle(lifecycle, 62_999).kind, "active");
+
+    const stalled = projectLifecycle(lifecycle, 63_000);
+    assert.equal(stalled.kind, "stalled");
+    assert.equal(stalled.stateDurationSince, 3_000);
+    assert.equal(lifecycleTransition("active", stalled.kind), "stalled");
+    assert.equal(
+      formatLifecycleTransitionLine("Worker", stalled, "stalled", 63_000, 1_000, formatElapsedDuration),
+      "Worker running 1m, stalled 1m.",
+    );
+
+    lifecycle = observePaneInspection(lifecycle, { kind: "present", observedAt: 64_000, agentStatus: "idle" }, 64_000);
+    const recovered = projectLifecycle(lifecycle, 65_000);
+    assert.equal(recovered.kind, "waiting");
+    assert.equal(lifecycleTransition(stalled.kind, recovered.kind), "recovered");
+    assert.equal(
+      formatLifecycleTransitionLine("Worker", recovered, "recovered", 65_000, 1_000, formatElapsedDuration),
+      "Worker running 1m, recovered; waiting 1s.",
+    );
   });
 
   it("does not interpret initial idle as completion", () => {

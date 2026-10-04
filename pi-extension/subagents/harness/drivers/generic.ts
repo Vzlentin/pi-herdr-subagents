@@ -45,22 +45,17 @@ export class GenericHarnessDriver implements HarnessDriver {
     let commandBody: string;
 
     if (template) {
-      // Replace template variables. Replacement values are passed via a
-      // replacer function (not a string) so that "$$", "$&", etc. in
-      // untrusted task/model/cwd text are inserted literally instead of
-      // being interpreted as String.replace() special patterns.
-      const quotedModel = effectiveModel ? shellQuote(effectiveModel) : "";
       const quotedTask = shellQuote(fullTask);
-      const quotedCwd = effectiveCwd ? shellQuote(effectiveCwd) : ".";
-      const quotedName = shellQuote(params.name);
-      const quotedId = shellQuote(params.id);
-      commandBody = template
-        .replace(/\{model\}/g, () => quotedModel)
-        .replace(/\{task\}/g, () => quotedTask)
-        .replace(/\{prompt\}/g, () => quotedTask)
-        .replace(/\{cwd\}/g, () => quotedCwd)
-        .replace(/\{name\}/g, () => quotedName)
-        .replace(/\{id\}/g, () => quotedId);
+      const replacements: Record<string, string> = {
+        model: effectiveModel ? shellQuote(effectiveModel) : "",
+        task: quotedTask,
+        prompt: quotedTask,
+        cwd: effectiveCwd ? shellQuote(effectiveCwd) : ".",
+        name: shellQuote(params.name),
+        id: shellQuote(params.id),
+      };
+      // One pass keeps placeholders and dollar patterns in values literal.
+      commandBody = template.replace(/\{(model|task|prompt|cwd|name|id)\}/g, (_match, key: string) => replacements[key]);
     } else {
       const binary = this.id === "generic" ? (agentDefs?.cli ?? "subagent") : this.id;
       const cmdParts: string[] = [binary];

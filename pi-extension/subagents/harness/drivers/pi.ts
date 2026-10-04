@@ -6,6 +6,7 @@ import type {
   BuiltHarnessCommand,
 } from "../types.ts";
 import type { ResolvedRuntimePlan } from "../../runtime-routing.ts";
+import { getSubagentActivityFile } from "../../activity.ts";
 
 const SUBAGENT_CONTROL_TOOLS = ["caller_ping", "subagent_done"] as const;
 const SUBAGENT_SPAWNING_TOOLS = [
@@ -135,7 +136,7 @@ export class PiHarnessDriver implements HarnessDriver {
         .replace(/\s+/g, "-")
         .replace(/-+/g, "-")
         .replace(/^-|-$/g, "");
-      const syspromptPath = join(artifactDir, `context/${spSafeName || "subagent"}-sysprompt-${spTimestamp}.md`);
+      const syspromptPath = join(artifactDir, `context/${spSafeName || "subagent"}-sysprompt-${spTimestamp}-${params.id}.md`);
       mkdirSync(dirname(syspromptPath), { recursive: true });
       writeFileSync(syspromptPath, identity, "utf8");
       parts.push(flag, shellQuote(syspromptPath));
@@ -164,12 +165,10 @@ export class PiHarnessDriver implements HarnessDriver {
     if (params.agent) {
       envParts.push(`PI_SUBAGENT_AGENT=${shellQuote(params.agent)}`);
     }
-    if (effectiveAutoExit) {
-      envParts.push("PI_SUBAGENT_AUTO_EXIT=1");
-    }
+    envParts.push(`PI_SUBAGENT_AUTO_EXIT=${effectiveAutoExit ? "1" : "0"}`);
     envParts.push(`PI_SUBAGENT_SESSION=${shellQuote(subagentSessionFile)}`);
     envParts.push(`PI_SUBAGENT_ID=${shellQuote(params.id)}`);
-    const activityFile = join(artifactDir, `subagent-activity-${params.id}.json`);
+    const activityFile = getSubagentActivityFile(artifactDir, params.id);
     envParts.push(`PI_SUBAGENT_ACTIVITY_FILE=${shellQuote(activityFile)}`);
     envParts.push(`PI_SUBAGENT_SURFACE=${shellQuote(surface)}`);
 
@@ -188,7 +187,7 @@ export class PiHarnessDriver implements HarnessDriver {
         .replace(/\s+/g, "-")
         .replace(/-+/g, "-")
         .replace(/^-|-$/g, "");
-      const artifactName = `context/${safeName || "subagent"}-${timestamp}.md`;
+      const artifactName = `context/${safeName || "subagent"}-${timestamp}-${params.id}.md`;
       const artifactPath = join(artifactDir, artifactName);
       mkdirSync(dirname(artifactPath), { recursive: true });
       writeFileSync(artifactPath, fullTask, "utf8");

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -18,6 +19,9 @@ import {
 } from "../pi-extension/subagents/harness/index.ts";
 import type { ResolvedRuntimePlan } from "../pi-extension/subagents/runtime-routing.ts";
 import type { SubagentResultContext } from "../pi-extension/subagents/harness/types.ts";
+import { getSubagentActivityFile } from "../pi-extension/subagents/activity.ts";
+import { shellQuote } from "../pi-extension/subagents/terminal.ts";
+import { drainInbox, getSubagentInboxDir, writeInboxMessage } from "../pi-extension/subagents/inbox.ts";
 import openAIServiceTierExtension, {
   applyOpenAIServiceTier,
   resolveOpenAIServiceTier,
@@ -53,7 +57,7 @@ function createMockLaunchContext(overrides?: Partial<SubagentLaunchContext>): Su
     inheritsConversationContext: true,
     taskDelivery: "direct",
     subagentsDir: "/path/to/subagents",
-    shellQuote: (s: string) => `'${s.replace(/'/g, "'\\''")}'`,
+    shellQuote,
     ...overrides,
   };
 }
@@ -145,6 +149,119 @@ describe("Pi Harness Driver", () => {
     assert.ok(built.command.includes("--model 'anthropic/claude-sonnet-4-5'"));
     assert.ok(built.command.includes("--thinking 'high'"));
     assert.ok(built.command.includes("echo '__SUBAGENT_DONE_'$?'__'"));
+  });
+
+  it("uses the parent's canonical activity path and message inbox", () => {
+    const artifactDir = mkdtempSync(join(tmpdir(), "pi-activity-path-test-"));
+    try {
+      const ctx = createMockLaunchContext({ artifactDir });
+      const built = driver.buildCommand(ctx);
+      const activityMatch = built.command.match(/PI_SUBAGENT_ACTIVITY_FILE='([^']+)'/);
+      assert.ok(activityMatch);
+      const childActivityFile = activityMatch[1];
+      const parentActivityFile = getSubagentActivityFile(artifactDir, ctx.params.id);
+      assert.equal(childActivityFile, parentActivityFile);
+      assert.equal(childActivityFile, join(artifactDir, "subagent-activity", `${ctx.params.id}.json`));
+
+      const parentInbox = getSubagentInboxDir(parentActivityFile);
+      const childInbox = getSubagentInboxDir(childActivityFile);
+      assert.equal(childInbox, parentInbox);
+      assert.equal(childInbox, join(artifactDir, "subagent-inbox", ctx.params.id));
+      const message = { text: "Continue with the next task.", from: "parent", sentAt: 1234 };
+      writeInboxMessage(parentInbox, message);
+      assert.deepEqual(drainInbox(childInbox), [message]);
+    } finally {
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  for (const systemPromptMode of ["append", "replace"] as const) {
+    it(`keeps same-name task and ${systemPromptMode} system prompt files separate`, (t) => {
+      t.mock.method(Date.prototype, "toISOString", () => "2026-10-04T09:03:38.000Z");
+      const artifactDir = mkdtempSync(join(tmpdir(), "pi-prompt-artifacts-test-"));
+      try {
+        const contexts = ["first", "second"].map((id) => createMockLaunchContext({
+          artifactDir,
+          params: { id, name: "Worker", task: `${id} task` },
+          taskDelivery: "artifact",
+          inheritsConversationContext: false,
+          identity: `${id} role instructions`,
+          identityInSystemPrompt: true,
+          systemPromptMode,
+          modeHint: "Complete the task.",
+          summaryInstruction: "Summarize your work.",
+        }));
+        const commands = contexts.map((ctx) => driver.buildCommand(ctx).command);
+        const flag = systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
+        const otherFlag = systemPromptMode === "replace" ? "--append-system-prompt" : "--system-prompt";
+        const taskFiles: string[] = [];
+        const systemPromptFiles: string[] = [];
+
+        for (const [index, command] of commands.entries()) {
+          const ctx = contexts[index];
+          const taskMatch = command.match(/'@([^']+)'/);
+          const systemPromptMatch = command.match(new RegExp(`${flag} '([^']+)'`));
+          assert.ok(taskMatch);
+          assert.ok(systemPromptMatch);
+          assert.ok(!command.includes(`${otherFlag} `));
+          const taskFile = taskMatch[1];
+          const systemPromptFile = systemPromptMatch[1];
+          taskFiles.push(taskFile);
+          systemPromptFiles.push(systemPromptFile);
+          assert.equal(
+            readFileSync(taskFile, "utf8"),
+            `\n\nComplete the task.\n\n${ctx.params.task}\n\nSummarize your work.`,
+          );
+          assert.equal(readFileSync(systemPromptFile, "utf8"), ctx.identity);
+        }
+
+        assert.notEqual(taskFiles[0], taskFiles[1]);
+        assert.notEqual(systemPromptFiles[0], systemPromptFiles[1]);
+        assert.equal(readdirSync(join(artifactDir, "context")).length, 4);
+      } finally {
+        rmSync(artifactDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const identity of [undefined, "Role instructions"]) {
+    it(`omits system prompt flags when ${identity ? "identityInSystemPrompt is false" : "identity is missing"}`, () => {
+      const artifactDir = mkdtempSync(join(tmpdir(), "pi-no-system-prompt-test-"));
+      try {
+        const built = driver.buildCommand(createMockLaunchContext({
+          artifactDir,
+          identity,
+          identityInSystemPrompt: identity == null,
+          systemPromptMode: "replace",
+        }));
+        assert.doesNotMatch(built.command, /--(?:append-)?system-prompt\b/);
+        assert.deepEqual(readdirSync(artifactDir), []);
+      } finally {
+        rmSync(artifactDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("overrides inherited auto-exit for both autonomous and interactive launches", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-auto-exit-test-"));
+    try {
+      writeFileSync(join(dir, "pi"), '#!/bin/sh\nprintf "%s\\n" "$PI_SUBAGENT_AUTO_EXIT"\n', { mode: 0o755 });
+      const cases = [[false, "0"], [true, "1"]] as const;
+      for (const [effectiveAutoExit, expected] of cases) {
+        const built = driver.buildCommand(createMockLaunchContext({
+          artifactDir: dir,
+          effectiveCwd: dir,
+          effectiveAutoExit,
+        }));
+        const output = execFileSync("bash", ["-c", built.command], {
+          env: { ...process.env, BASH_ENV: "", PATH: `${dir}:${process.env.PATH ?? ""}`, PI_SUBAGENT_AUTO_EXIT: "1" },
+          encoding: "utf8",
+        });
+        assert.deepEqual(output.trim().split("\n"), [expected, "__SUBAGENT_DONE_0__"]);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("opts into OpenAI priority tier only when fast is true", () => {
@@ -497,6 +614,47 @@ describe("Generic Harness Driver & Templates", () => {
       built.command.includes("use $$ for the current PID and $& for the whole match"),
       `expected literal $$ and $& in: ${built.command}`,
     );
+  });
+
+  it("leaves template placeholders inside replacement values unchanged", () => {
+    const dir = mkdtempSync(join(tmpdir(), "custom-cli-args-test-"));
+    try {
+      writeFileSync(join(dir, "custom"), '#!/bin/sh\nprintf "%s\\0" "$@"\n', { mode: 0o755 });
+      const cwd = join(dir, "workspace {name}'s");
+      mkdirSync(cwd);
+      const driver = new GenericHarnessDriver("custom");
+      const ctx = createMockLaunchContext({
+        effectiveModel: "model-{task}",
+        effectiveCwd: cwd,
+        params: {
+          id: "{name}",
+          name: "worker {id}'s",
+          task: "Keep {model}, {task}, {prompt}, {cwd}, {name}, {id}, $$ and $& literal.\nDon't change this.",
+        },
+        agentDefs: {
+          name: "custom",
+          commandTemplate: "custom --model {model} --task {task} --prompt {prompt} --cwd {cwd} --name {name} --id {id} {unknown}",
+        },
+      });
+
+      const built = driver.buildCommand(ctx);
+      const output = execFileSync("bash", ["-c", built.command], {
+        env: { ...process.env, BASH_ENV: "", PATH: `${dir}:${process.env.PATH ?? ""}` },
+        encoding: "utf8",
+      }).split("\0");
+      assert.equal(output.pop(), "__SUBAGENT_DONE_0__\n");
+      assert.deepEqual(output, [
+        "--model", "model-{task}",
+        "--task", ctx.params.task,
+        "--prompt", ctx.params.task,
+        "--cwd", cwd,
+        "--name", "worker {id}'s",
+        "--id", "{name}",
+        "{unknown}",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("extracts output from terminal pane buffer using the driver's display name", async () => {

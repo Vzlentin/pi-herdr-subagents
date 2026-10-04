@@ -9,9 +9,14 @@
   "author": "0xRichardH",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aliceisjustplaying/pi-herdr-subagents"
+    "url": "https://github.com/Vzlentin/pi-herdr-subagents"
   },
   "type": "module",
+  "files": [
+    "pi-extension/",
+    "config.json.example",
+    "RELEASING.md"
+  ],
   "scripts": {
     "lint": "oxlint pi-extension test",
     "test": "node --test test/test.ts test/runtime-routing.test.ts test/release-workflow.test.ts test/harness-drivers.test.ts",

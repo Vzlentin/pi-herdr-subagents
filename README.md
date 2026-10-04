@@ -45,12 +45,16 @@ The full suite launches real Pi sessions and can take several minutes. `PI_TEST_
 Install this fork from GitHub:
 
 ```bash
-pi install git:github.com/aliceisjustplaying/pi-herdr-subagents
+pi install git:github.com/Vzlentin/pi-herdr-subagents
 ```
+
+To use this checkout during development, run `npm ci`, then `pi install .` from the repository root. Pi loads the checkout in place. Run `/reload` after editing an extension.
+
+The project file `.pi/settings.json` also loads the subagent extension when Pi runs in this repository, even without a global package install.
 
 This project does not install or load `HazAT/pi-interactive-subagents` automatically.
 
-Changing the `package.json` version on `main` automatically creates a matching Git tag and GitHub Release, generates release notes, and publishes the package to npm. For authentication, versioning, verification, and troubleshooting, see [RELEASING.md](RELEASING.md).
+Releases are disabled unless the repository variable `ENABLE_RELEASES` is set to `true`. Once enabled, changing the `package.json` version on `main` creates a matching Git tag and GitHub Release, generates release notes, and publishes the package to npm. For authentication, versioning, verification, and troubleshooting, see [RELEASING.md](RELEASING.md).
 
 Start herdr, then run pi inside it:
 
@@ -73,7 +77,7 @@ Subagent tabs and panes are created without stealing keyboard focus. Launch comm
 
 ### Extensions
 
-**Subagents** — 5 main-session tools + 3 commands, plus 1 subagent-only tool:
+**Subagents**: 5 main-session tools, 2 commands, and 2 subagent-only tools (`caller_ping` and `subagent_done`):
 
 | Tool                 | Description                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------- |
@@ -92,7 +96,7 @@ Subagent tabs and panes are created without stealing keyboard focus. Launch comm
 
 This fork ships no preset agents. By default, the orchestrator writes a bare spawn for the job at hand, supplying `task` and optionally `systemPrompt`, `tools` or `skills`. If you want reusable named agents, define them yourself (see [Custom Agents](#custom-agents)). Discovery priority is **project-local** (`.pi/agents/`) > **global** (`~/.pi/agent/agents/`). The discovered names, descriptions and runtime defaults are included in the subagent tool guidance.
 
-Named agents use model defaults from `config.json` when configured; otherwise they inherit the parent model. For a named agent, callers should omit `model` and `thinking` so those configured defaults apply. Passing either field explicitly is a one-off override and takes precedence over agent frontmatter.
+Named agents use their frontmatter model first, then defaults from `config.json`, and otherwise inherit the parent model. For a named agent, callers should omit `model` and `thinking` so those configured defaults apply. Passing either field explicitly is a one-off override and takes precedence over agent frontmatter.
 
 ### Supported Harness CLIs
 
@@ -163,7 +167,7 @@ A fixed internal watchdog marks a run as `stalled` when pane inspection fails or
 
 #### Configuration
 
-Status display is controlled by `config.json` in the extension directory. Copy `config.json.example` to get started:
+Status display is controlled by `config.json` in the package root. Copy `config.json.example` to get started:
 
 ```bash
 cp config.json.example config.json
@@ -227,6 +231,7 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 | `fork`                 | boolean | `false`        | Force the full-context fork mode for this spawn, overriding any agent `session-mode` frontmatter  |
 | `interactive`          | boolean | derived        | Mark this spawn as interactive (don't wake the parent on stall/recovery). Defaults to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit`. |
 | `model`                | string  | agent, configured, or parent | Exact authenticated `provider/model-id`; resolution is tool argument → agent frontmatter → per-agent config → global config → parent |
+| `fast`                 | boolean | `false`        | Opt into OpenAI priority processing for this dispatch; ignored by other providers and non-Pi harnesses |
 | `thinking`             | string  | agent or parent | Pi thinking level (`off` through `max`); resolution is tool argument → agent frontmatter → parent |
 | `systemPrompt`         | string  | —              | Append to system prompt                                                                           |
 | `skills`               | string  | —              | Comma-separated skill names                                                                       |
@@ -275,6 +280,7 @@ The `caller_ping` tool lets a subagent request help from its parent agent. When 
 - `name` (optional): Display name for the resumed pane (defaults to `Resume`)
 - `message` (optional): Follow-up prompt to send after resuming
 - `autoExit` (optional): Whether the resumed session should auto-exit after its next response. Defaults to `true` for autonomous follow-up work; set `false` when resuming for an interactive handoff.
+- `fast` (optional): Opt into OpenAI priority processing for this resumed dispatch. Defaults to `false`.
 
 **Interaction flow:**
 1. Child calls `caller_ping({ message: "Not sure which schema to use" })`
@@ -342,8 +348,8 @@ You are a specialized agent that does X...
 | `session-mode` | string | Default child-session mode: `standalone`, `lineage-only`, or `fork` |
 | `spawning`    | boolean | Set `false` to deny all subagent-spawning tools                                                                                                                                                                                                                             |
 | `deny-tools`  | string  | Comma-separated extension tool names to deny                                                                                                                                                                                                                                |
-| `auto-exit`   | boolean | Auto-shutdown when the agent finishes its turn — no `subagent_done` call needed. If the user sends any input, auto-exit is permanently disabled and the user takes over the session. Recommended for autonomous agents (scout, worker); not for interactive ones (planner). Also determines the default value of `interactive` (see below). |
-| `interactive` | boolean | derived        | Override whether stall/recovery transitions wake the parent session. Defaults to the inverse of `auto-exit`: autonomous agents (`auto-exit: true`) are non-interactive and get stall pings; agents without `auto-exit` are interactive and stay quiet. Explicit values take precedence. |
+| `auto-exit`   | boolean | Shut down after Pi settles. No `subagent_done` call needed. Manual input does not disable auto-exit. Escape or an aborted turn keeps the session open. Recommended for autonomous agents (scout, worker); not for interactive ones (planner). Also determines the default value of `interactive` (see below). |
+| `interactive` | boolean | Override whether stall/recovery transitions wake the parent session. Defaults to the inverse of `auto-exit`: autonomous agents (`auto-exit: true`) are non-interactive and get stall pings; agents without `auto-exit` are interactive and stay quiet. Explicit values take precedence. |
 | `cwd`         | string  | Default working directory (absolute or relative to project root)                                                                                                                                                                                                            |
 | `disable-model-invocation` | boolean | Hide this agent from discovery surfaces like `subagents_list`. The agent still remains directly invokable by explicit name via `subagent({ agent: "name", ... })`. |
 
@@ -372,12 +378,12 @@ session-mode: lineage-only
 
 ### `auto-exit`
 
-When set to `true`, the agent session shuts down automatically as soon as the agent finishes its turn — no explicit `subagent_done` call is needed.
+When set to `true`, the agent session shuts down automatically after Pi settles. No explicit `subagent_done` call is needed.
 
 **Behavior:**
 
-- The session closes after the agent's final message (on the `agent_end` event)
-- If the user sends **any input** before the agent finishes, auto-exit is permanently disabled for that session — the user takes over interactively
+- The session closes after Pi settles (`agent_settled`), once retries, continuations, child results, and extension keepalive work have finished
+- Manual input does not disable auto-exit. Escape or an aborted turn leaves the session open for inspection or another prompt
 - The modeHint injected into the agent's task is adjusted accordingly: autonomous agents see "Complete your task autonomously." rather than instructions to call `subagent_done`
 
 **When to use:**
@@ -396,7 +402,7 @@ auto-exit: true
 
 Controls whether status transitions (`stalled`, `recovered`) wake the parent session with a steer message.
 
-**Default:** the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and ping the parent on stall/recovery; agents without `auto-exit` are interactive and stay quiet. Bare spawns with no agent defs (e.g. `/iterate` with `fork: true`) are treated as interactive.
+**Default:** the inverse of the resolved `auto-exit` setting. Named agents without `auto-exit` are interactive and stay quiet. Bare task spawns are autonomous by default and get stall/recovery notifications. `/iterate` explicitly sets `interactive: true` to stay open for user input.
 
 **Why it exists:** Interactive agents can run for minutes or hours while the user thinks, types, and reads in the subagent's pane. Child snapshots still update the widget, but stalled/recovered supervision messages rarely need to wake the parent for user-driven sessions. Skipping the steer keeps the parent quiet until the child actually finishes.
 
@@ -422,7 +428,7 @@ subagent({ name: "Scout", agent: "scout", interactive: true, task: "..." });
 
 ## Recursive Dispatch and OpenAI Service Tiers
 
-By default, every Pi sub-agent can spawn further sub-agents. Native-tool allowlists such as `tools: read, bash` automatically retain `subagent`, `subagent_interrupt`, `subagents_list`, and `subagent_resume`, so limiting coding tools does not accidentally disable delegation.
+By default, every Pi sub-agent can spawn further sub-agents. Native-tool allowlists such as `tools: read, bash` automatically retain `subagent`, `subagent_interrupt`, `subagent_message`, `subagents_list`, and `subagent_resume`, so limiting coding tools does not accidentally disable delegation.
 
 Fresh and resumed Pi children use `service_tier: "default"` for the `openai` and `openai-codex` providers unless the dispatch explicitly sets `fast: true`. This per-dispatch choice overrides an enabled global Fast Mode extension:
 
@@ -438,7 +444,7 @@ Control recursive dispatch with frontmatter:
 
 ### `spawning: false`
 
-Denies all subagent lifecycle tools (`subagent`, `subagent_interrupt`, `subagents_list`, `subagent_resume`):
+Denies all subagent lifecycle tools (`subagent`, `subagent_interrupt`, `subagent_message`, `subagents_list`, `subagent_resume`):
 
 ```yaml
 ---

@@ -1,15 +1,15 @@
 # Release guide
 
-GitHub Actions publishes this package when the version in `package.json` changes on `main`. The release workflow validates the package, creates a matching `vX.Y.Z` tag, publishes to npm with provenance, and creates a GitHub Release with generated notes and a link to the npm package.
+Releases are disabled by default. GitHub Actions publishes this package when the version in `package.json` changes on `main` and the repository variable `ENABLE_RELEASES` is set to `true`. The release workflow validates the package, creates a matching `vX.Y.Z` tag, publishes to npm with provenance, and creates a GitHub Release with generated notes and a link to the npm package.
 
-The published version must be unique on npm.
+The published version must be unique on npm. The package name is still `pi-herdr-subagents`. Use a different name before publishing this fork if you do not own that npm package.
 
 ## Prerequisites
 
 You need:
 
 - Publish access to the `pi-herdr-subagents` package on npm
-- Permission to manage this repository's GitHub Actions secrets
+- Permission to manage this repository's GitHub Actions secrets and variables
 - A clean local `main` branch
 
 Run the checks before starting:
@@ -34,6 +34,12 @@ npm pack --dry-run
 Never store the token in the repository, `package.json`, or a committed `.npmrc` file.
 
 If the package does not exist on npm yet and the workflow cannot create it with the token, publish the first version locally with `npm login` and `npm publish --access public`. Keep the version-driven workflow for later releases.
+
+## Enable releases
+
+After checking package ownership and npm authentication, open **Settings → Secrets and variables → Actions → Variables** and create `ENABLE_RELEASES` with the value `true`.
+
+Both automatic releases and manual workflow runs require this variable. Leave it unset to keep releases disabled.
 
 ## Publish a release
 

@@ -104,7 +104,7 @@ describe("runtime routing", () => {
       { model: "other/missing" },
       { model: "other/unauthed" },
     ]) {
-      const entries = [model("fake", "parent"), model("other", "unauthed")];
+      const entries = [model("fake", "parent"), model("other", "fast"), model("other", "unauthed")];
       assert.throws(
         () => resolveRuntimePlan(request, {}, parent, registry(entries)),
         RuntimeResolutionError,
